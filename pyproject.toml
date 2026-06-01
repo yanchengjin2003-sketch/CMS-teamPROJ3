@@ -1,0 +1,144 @@
+[build-system]
+requires = ["setuptools>=64", "Cython>=3.0.0", "numpy"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cellmap-segmentation-challenge"
+dynamic = ["version"]
+description = "Repository of scripts to facilitate participation in CellMap's segmentation challenge. This includes downloading data, simple setups for training 2D and 3D models, workflows for prediction and post-processing on out-of-memory arrays, and evaluation of results against validation data."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+keywords = ["machine learning", "deep learning", "segmentation", "cellmap"]
+authors = [
+  { name = "Jeff Rhoades", email = "rhoadesj@janelia.hhmi.org" },
+  { name = "Emma Avetissian", email = "avetissiane@janelia.hhmi.org" },
+  { name = "Davis Vann Bennett", email = "davis.v.bennett@gmail.com" },
+  { name = "Marwan Zouinkhi", email = "zouinkhim@hhmi.org" },
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
+]
+dependencies = [
+  "torch",
+  "tensorboard",
+  "tensorboardX",
+  "click>=8, <9",
+  "cellmap-data>=2026.2.19.2140",
+  "tqdm",
+  "numcodecs < 0.16.0",
+  "zarr < 3.0.0",
+  "structlog",
+  "psutil>=5.9.0",
+  "yarl",
+  "toolz",
+  "ml-collections",
+  "scipy",
+  "numpy",
+  "tensorstore",
+  "python-dotenv",
+  "universal-pathlib",
+  "neuroglancer",
+  "scikit-learn",
+  "scikit-image",
+  "boto3==1.35.81",
+  "pyreadline3; sys_platform == 'win32'",
+  "cellmap-flow@git+https://github.com/janelia-cellmap/cellmap-flow@1ece404",
+  "pykdtree",
+  "fastremap",
+  "connected-components-3d",
+  "ortools",
+  "Cython",
+  "gitpython",
+  ]
+
+[project.optional-dependencies]
+test = ["pytest>=6.0", "pytest-cov", "mypy", "black", "pytest-dependency", "pytest-xdist"]
+docs = [
+    "sphinx",
+    "sphinx-book-theme",
+    "sphinx_mdinclude",
+]
+dev = [
+    "ipython",
+    "jupyter",
+    "rich",
+    "ruff",
+    "snakeviz",
+    "twine",
+    "hatch",
+    "pdbpp",
+    "python-semantic-release",
+    "cellmap-segmentation-challenge[test,docs]",
+    "gunpowder",
+    "matplotlib",
+    "isort",
+]
+all = ["cellmap-segmentation-challenge[dev,docs,test]"]
+
+[project.urls]
+Documentation = "https://github.com/janelia-cellmap/cellmap-segmentation-challenge#readme"
+Issues = "https://github.com/janelia-cellmap/cellmap-segmentation-challenge/issues"
+Source = "https://github.com/janelia-cellmap/cellmap-segmentation-challenge"
+
+[tool.hatch.metadata]
+allow-direct-references=true
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.package-data]
+cellmap_segmentation_challenge = ["**/*.csv"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = {attr = "cellmap_segmentation_challenge.__about__.__version__"}
+
+[tool.hatch.envs.default]
+installer = "pip"
+python = "3.11"
+
+[tool.hatch.envs.test]
+dependencies = ["pytest"]
+
+[tool.hatch.envs.types]
+extra-dependencies = [
+  "mypy>=1.0.0",
+]
+[tool.hatch.envs.types.scripts]
+check = "mypy --install-types --non-interactive {args:src/cellmap_segmentation_challenge tests}"
+
+[tool.coverage.run]
+source_pkgs = ["cellmap_segmentation_challenge", "tests"]
+branch = true
+parallel = true
+omit = [
+  "src/cellmap_segmentation_challenge/__about__.py",
+]
+
+[tool.coverage.paths]
+cellmap_segmentation_challenge = ["src/cellmap_segmentation_challenge", "*/cellmap-segmentation-challenge/src/cellmap_segmentation_challenge"]
+tests = ["tests", "*/cellmap-segmentation-challenge/tests"]
+
+[tool.coverage.report]
+exclude_lines = [
+  "no cov",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+]
+
+[project.scripts]
+csc = "cellmap_segmentation_challenge.cli:run"
+
+[tool.pytest.ini_options]
+"testpaths" = "tests"
+markers = [
+    "dependency: mark tests as dependent on other tests"
+]
