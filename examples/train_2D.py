@@ -49,7 +49,7 @@ model = UNet_2D(1, len(classes))
 # model_to_load = "2d_resnet"  # name of the pre-trained model to load
 # model = ResNet(ndims=2, output_nc=len(classes))
 
-load_model = "latest"  # load the "latest" model or the "best" validation model
+load_model = "latest1"  # load the "latest" model or the "best" validation model
 
 # Define the paths for saving the model and logs, etc.
 logs_save_path = UPath(
