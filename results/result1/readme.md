@@ -14,7 +14,7 @@ model_to_load = "3d_transunet"  # name of the pre-trained model to load
 model = TransUNet_3D(1, len(classes), img_size=input_array_info["shape"])
 ```
 
-
+3d_transunet see paper: [[2310.07781\] 3D TransUNet: Advancing Medical Image Segmentation through Vision Transformers](https://arxiv.org/abs/2310.07781)
 
 # Processed and predicted data #
 
