@@ -190,6 +190,7 @@ def train(config_path: str):
     )
     max_grad_norm = getattr(config, "max_grad_norm", None)
     force_all_classes = getattr(config, "force_all_classes", "validate")
+    print("force_all_classes:", force_all_classes)
 
     # %% Define the optimizer, from the config file or default to RAdam
     optimizer = getattr(

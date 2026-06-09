@@ -40,6 +40,7 @@ random_seed = 42  # random seed for reproducibility
 # classes = ["nuc", "er"]  # list of classes to segment
 # classes = get_tested_classes()  # list of classes to segment
 classes = ["endo_lum", "cyto", "endo_mem"]
+force_all_classes = True
 
 # # Defining model (comment out all that are not used)
 # # 3D UNet
