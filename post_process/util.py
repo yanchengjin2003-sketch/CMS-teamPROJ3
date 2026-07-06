@@ -118,7 +118,7 @@ def load_multiclass_result(class_names, file_domain, crop, scale='s0') -> np.nda
     ], axis=-1)
 
 
-def visualize(pixels: Tensor, labels: Tensor):
+def visualize(pixels: Tensor, labels: Tensor, label_names: list[str] = None):
     """Visualize the images with different colors based on labels
 
     :param pixels: (W, H), tensor of a grayscale image
@@ -150,8 +150,10 @@ def visualize(pixels: Tensor, labels: Tensor):
     fig, ax = plt.subplots()
     ax.imshow(rgb.transpose(1, 0, 2), origin='lower')
     ax.legend(
-        handles=[Patch(color=to_hex(palette[i].tolist()), label=f'class {int(lid)}')
-                 for i, lid in enumerate(label_ids.tolist())],
+        handles=[
+            Patch(color=to_hex(palette[i].tolist()), label=f'class {int(lid)}' if label_names is None else label_names[lid])
+            for i, lid in enumerate(label_ids.tolist())
+        ],
         bbox_to_anchor=(1.05, 1), loc='upper left',
     )
     plt.tight_layout()

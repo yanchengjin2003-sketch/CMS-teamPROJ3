@@ -12,7 +12,7 @@ def labeling_cost(C: Tensor, X: Tensor) -> Tensor:
     """
     assert C.shape == X.shape, f'Shape mismatch: {C.shape}, {X.shape}'
     assert C.dim() == X.dim() == 5, f'Dimension mismatch: {C.dim()}, {X.dim()}'
-    return (C * X).sum(dim=(1, 2, 3, 4), keepdim=True)
+    return (C * X).sum(dim=(1, 2, 3, 4), keepdim=True).reshape(-1, 1)
 
 
 # ─────────────────────────────────────────────
@@ -123,6 +123,69 @@ def adjacency_cost(
 
     return total.reshape(-1, 1)
 
+
+# ─────────────────────────────────────────────
+# Enclosure Cost
+# ─────────────────────────────────────────────
+
+def compute_escape_count(labels: Tensor, inner_layer_id: int, outer_layer_id: int) -> Tensor:
+    """(N, W, H, D) -> 每个体素的'逃逸邻居'个数（标签既非膜也非胞质的邻居数）"""
+    is_escape = ((labels != inner_layer_id) & (labels != outer_layer_id)).to(torch.float32)
+    is_escape = is_escape.unsqueeze(1)  # (N, 1, W, H, D)
+    kernel = torch.zeros(1, 1, 3, 3, 3, device=labels.device, dtype=is_escape.dtype)
+    kernel[0, 0, 1, 1, 0] = kernel[0, 0, 1, 1, 2] = 1
+    kernel[0, 0, 1, 0, 1] = kernel[0, 0, 1, 2, 1] = 1
+    kernel[0, 0, 0, 1, 1] = kernel[0, 0, 2, 1, 1] = 1
+    return F.conv3d(is_escape, kernel, padding=1).squeeze(1)  # (N, W, H, D)
+
+
+def compute_boundary_mask(labels: Tensor) -> Tensor:
+    """(N, W, H, D) bool 掩码，标记体素是否处于图像的空间边界（W/H/D任一维的首末切片）。"""
+    mask = torch.zeros_like(labels, dtype=torch.bool)
+    mask[:, 0, :, :] = True
+    mask[:, -1, :, :] = True
+    mask[:, :, 0, :] = True
+    mask[:, :, -1, :] = True
+    mask[:, :, :, 0] = True
+    mask[:, :, :, -1] = True
+    return mask
+
+
+def enclosure_cost(labels: Tensor, inner_layer_id: int, outer_layer_id: int, C_enclose) -> Tensor:
+    escape_count = compute_escape_count(labels, inner_layer_id, outer_layer_id)
+    is_boundary = compute_boundary_mask(labels)
+    # 边界体素缺失的邻居会被 conv3d 的零填充误判为"逃逸邻居数为0"，因此边界体素永远不计入被非法包裹的惩罚。
+    return C_enclose * ((escape_count == 0) & ~is_boundary).float()
+
+
+def local_enclosure_bias(local_cost, labels, forbidden_enclosure_pairs, C_enclose) -> Tensor:
+    enclosure_bias = torch.zeros_like(local_cost)
+    for (inner_layer_id, outer_layer_id) in forbidden_enclosure_pairs:
+        enclosure_bias[..., inner_layer_id] += enclosure_cost(labels, inner_layer_id, outer_layer_id, C_enclose)
+        local_cost = local_cost + enclosure_bias
+    return local_cost
+
+def total_enclosure_cost(
+    labels: Tensor,
+    forbidden_enclosure_pairs: list[tuple[int, int]],
+    C_enclose: float | int = 1e6,
+) -> Tensor:
+    """Scalar enclosure penalty actually incurred by `labels`.
+
+    Mirrors `local_enclosure_bias`: for each forbidden (inner, outer) pair,
+    every voxel currently labeled `inner_layer_id` that has zero non-inner/
+    outer neighbors (i.e. is fully enclosed) contributes `C_enclose`.
+
+    :param labels: (N, W, H, D) int64
+    :return:       (N, 1)
+    """
+    N = labels.shape[0]
+    total = torch.zeros(N, dtype=torch.float32, device=labels.device)
+    for (inner_layer_id, outer_layer_id) in forbidden_enclosure_pairs:
+        penalty = enclosure_cost(labels, inner_layer_id, outer_layer_id, C_enclose)  # (N, W, H, D)
+        is_inner = (labels == inner_layer_id).to(penalty.dtype)
+        total = total + (penalty * is_inner).sum(dim=(1, 2, 3))
+    return total.reshape(-1, 1)
 
 # ─────────────────────────────────────────────
 # Total Cost Builder
