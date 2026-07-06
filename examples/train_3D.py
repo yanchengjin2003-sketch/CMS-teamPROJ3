@@ -31,13 +31,15 @@ from cellmap_segmentation_challenge.models import (
 )
 from cellmap_segmentation_challenge.utils import get_tested_classes
 from cellmap_segmentation_challenge.utils.loss import (
+    CellMapAdjacencyPriorDiceCELoss,
     CellMapCrossEntropyLoss,
+    CellMapDiceCELoss,
     CellMapFilteredDynamicWeightedDiceCELoss,
 )
 
 # %% Set hyperparameters and other configurations
-learning_rate = 0.00005  # learning rate for the optimizer
-batch_size = 2  # final valid batch size after patch filtering
+learning_rate = 0.0001  # learning rate for the optimizer
+batch_size = 1  # final valid batch size after patch filtering
 input_array_info = {
     "shape": (128, 128, 128),
     "scale": (8, 8, 8),
@@ -59,21 +61,28 @@ force_all_classes = True
 predict_filter_classes = False
 
 # Formal six-class experiment:
-# 0.4 dynamic inverse-frequency CE + 0.6 Dice.
+# Dynamic inverse-frequency WCE + per-class Dice + per-class IoU.
 # Patches where ecs + bg occupy more than 60% are rejected before model forward.
 patch_filter_class_indices = [4, 5]  # ["ecs", "bg"]
 patch_filter_ratio_threshold = 0.65
 patch_filter_max_attempts = 200
 patch_filter_min_batch_size = 16
 
-criterion = CellMapFilteredDynamicWeightedDiceCELoss
+criterion = CellMapAdjacencyPriorDiceCELoss
 criterion_kwargs = {
     "ce_weight": 0.5,
     "dice_weight": 0.5,
-    "dice_smooth": 0.02,
-    "min_class_weight": 0.1,
-    "max_class_weight": 10.0,
+    "dice_smooth": 0.4,
     "include_background": True,
+    "class_names": classes,
+    "prior_weight": 0.1,
+    "adjacency_weight": 0.8,
+    "adjacency_pairs": [
+        ("endo_lum", "endo_mem"),
+    ],
+    "size_weight": 0.2,
+    "size_class_names": ["ecs", "bg"],
+    "size_ratio_threshold": 0.65,
 }
 wrap_loss = False
 weight_loss = False
@@ -85,19 +94,24 @@ validation_wrap_loss = False
 
 # # Defining model (comment out all that are not used)
 # # 3D UNet
-# model_name = "3d_unet_6class"  # keep six-class checkpoints separate
-# model_to_load = "3d_unet_6class"
-# model = UNet_3D(1, len(classes))
+model_name = "3d_unet_6class"  # keep six-class checkpoints separate
+model_to_load = "3d_unet_6class"
+model = UNet_3D(1, len(classes))
 
 # 3D ResNet
 # model_name = "3d_resnet_6class"
 # model_to_load = "3d_resnet_6class"
 # model = ResNet(ndims=3, output_nc=len(classes))
 
+# 3D ViT-V-Net
+# model_name = "3d_vitvnet_6class"
+# model_to_load = "3d_vitvnet_6class"
+# model = ViTVNet(len(classes), img_size=input_array_info["shape"])
+
 # # 3D TransUNet
-model_name = "3d_transunet_6class"
-model_to_load = "3d_transunet_6class"
-model = TransUNet_3D(1, len(classes), img_size=input_array_info["shape"])
+# model_name = "3d_transunet_6class"
+# model_to_load = "3d_transunet_6class"
+# model = TransUNet_3D(1, len(classes), img_size=input_array_info["shape"])
 
 # 3D SegFormer
 # model_name = "3d_segformer_6class"

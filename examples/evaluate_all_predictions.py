@@ -21,6 +21,8 @@ DATA_DIR = PROJECT_ROOT / "data"
 
 CLASSES = ["endo_lum", "cyto", "endo_mem", "pm", "ecs", "bg"]
 NS_DICE_DISTANCE_TOLERANCE = 1.0
+FILTER_GT_CLASSES = ["ecs", "bg"]
+FILTER_GT_FRACTION_THRESHOLD = 0.99
 
 
 @dataclass
@@ -30,8 +32,11 @@ class CropMetrics:
     valid_voxels: int
     correct_voxels: int
     gt_counts: np.ndarray
+    gt_filter_fraction: float
     one_hot_dice: np.ndarray
     logits_dice: np.ndarray
+    one_hot_iou: np.ndarray
+    logits_iou: np.ndarray
     ns_dice: np.ndarray
 
 
@@ -219,6 +224,15 @@ def class_volume_fractions(gt_counts: np.ndarray) -> np.ndarray:
     return gt_counts.astype(np.float64) / total
 
 
+def gt_filter_fraction(gt_counts: np.ndarray) -> float:
+    total = float(gt_counts.sum())
+    if total <= 0:
+        return float("nan")
+
+    filter_indices = [CLASSES.index(cls) for cls in FILTER_GT_CLASSES]
+    return float(gt_counts[filter_indices].sum() / total)
+
+
 def print_metric_row(name: str, per_class: np.ndarray, gt_fractions: np.ndarray) -> None:
     per_class = np.asarray(per_class, dtype=np.float64)
     mean_value = float(np.nanmean(per_class))
@@ -243,7 +257,7 @@ def metric_scores(
     logits: np.ndarray,
     pred: np.ndarray,
     labels: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     if DiceMetric is None or SurfaceDiceMetric is None:
         raise RuntimeError(
             "MONAI is required for Dice/NS Dice metrics. "
@@ -257,6 +271,9 @@ def metric_scores(
     pred_tensor = torch.from_numpy(pred_one_hot).unsqueeze(0)
     gt_tensor = torch.from_numpy(gt_one_hot).unsqueeze(0)
     prob_tensor = torch.from_numpy(prob_softmax).unsqueeze(0)
+
+    one_hot_iou = per_class_iou(pred_one_hot, gt_one_hot)
+    logits_iou = per_class_iou(prob_softmax, gt_one_hot)
 
     dice = DiceMetric(include_background=True, reduction="mean_batch", ignore_empty=False)
     one_hot = dice(y_pred=pred_tensor, y=gt_tensor).detach().cpu().numpy().reshape(-1)
@@ -273,7 +290,21 @@ def metric_scores(
     ns = ns_dice(y_pred=pred_tensor, y=gt_tensor).detach().cpu().numpy().reshape(-1)
     ns_dice.reset()
 
-    return one_hot, logits_dice, ns
+    return one_hot, logits_dice, one_hot_iou, logits_iou, ns
+
+
+def per_class_iou(pred_or_prob: np.ndarray, gt_one_hot: np.ndarray) -> np.ndarray:
+    pred_or_prob = pred_or_prob.astype(np.float64)
+    gt_one_hot = gt_one_hot.astype(np.float64)
+    intersection = (pred_or_prob * gt_one_hot).reshape(len(CLASSES), -1).sum(axis=1)
+    union = (
+        pred_or_prob + gt_one_hot - pred_or_prob * gt_one_hot
+    ).reshape(len(CLASSES), -1).sum(axis=1)
+
+    result = np.full(len(CLASSES), np.nan, dtype=np.float64)
+    valid = union > 0
+    result[valid] = intersection[valid] / union[valid]
+    return result
 
 
 def evaluate_crop(dataset: str, crop: str, crop_path: Path) -> CropMetrics:
@@ -299,7 +330,8 @@ def evaluate_crop(dataset: str, crop: str, crop_path: Path) -> CropMetrics:
     correct = int(((pred == gt) & valid).sum())
     valid_voxels = int(valid.sum())
     gt_counts = labels.reshape(labels.shape[0], -1).sum(axis=1).astype(np.float64)
-    one_hot, logits_dice, ns = metric_scores(logits, pred, labels)
+    filter_fraction = gt_filter_fraction(gt_counts)
+    one_hot, logits_dice, one_hot_iou, logits_iou, ns = metric_scores(logits, pred, labels)
 
     return CropMetrics(
         dataset=dataset,
@@ -307,8 +339,11 @@ def evaluate_crop(dataset: str, crop: str, crop_path: Path) -> CropMetrics:
         valid_voxels=valid_voxels,
         correct_voxels=correct,
         gt_counts=gt_counts,
+        gt_filter_fraction=filter_fraction,
         one_hot_dice=one_hot,
         logits_dice=logits_dice,
+        one_hot_iou=one_hot_iou,
+        logits_iou=logits_iou,
         ns_dice=ns,
     )
 
@@ -343,21 +378,32 @@ def main() -> None:
 
     metrics: list[CropMetrics] = []
     failures: list[str] = []
+    filtered: list[CropMetrics] = []
     for index, (dataset, crop, crop_path) in enumerate(crops, start=1):
         try:
             metric = evaluate_crop(dataset, crop, crop_path)
-            metrics.append(metric)
             accuracy = metric.correct_voxels / max(1, metric.valid_voxels)
+            if metric.gt_filter_fraction > FILTER_GT_FRACTION_THRESHOLD:
+                filtered.append(metric)
+                print(
+                    f"[{index:>3}/{len(crops)}] FILTER {dataset}/{crop}: "
+                    f"{'+'.join(FILTER_GT_CLASSES)}={format_percent(metric.gt_filter_fraction)}, "
+                    f"valid={metric.valid_voxels:,}, accuracy={format_percent(accuracy)}"
+                )
+                continue
+
+            metrics.append(metric)
             print(
                 f"[{index:>3}/{len(crops)}] {dataset}/{crop}: "
-                f"valid={metric.valid_voxels:,}, accuracy={format_percent(accuracy)}"
+                f"valid={metric.valid_voxels:,}, accuracy={format_percent(accuracy)}, "
+                f"{'+'.join(FILTER_GT_CLASSES)}={format_percent(metric.gt_filter_fraction)}"
             )
         except Exception as exc:
             failures.append(f"{dataset}/{crop}: {exc}")
             print(f"[{index:>3}/{len(crops)}] SKIP {dataset}/{crop}: {exc}")
 
     if not metrics:
-        raise RuntimeError("No crops could be evaluated.")
+        raise RuntimeError("No crops remained after filtering.")
 
     total_valid = sum(m.valid_voxels for m in metrics)
     total_correct = sum(m.correct_voxels for m in metrics)
@@ -368,7 +414,12 @@ def main() -> None:
     print()
     print("=" * 80)
     print("Overall metrics")
-    print(f"Evaluated crops: {len(metrics)} / {len(crops)}")
+    print(f"Included crops: {len(metrics)} / {len(crops)}")
+    print(
+        f"Filtered crops: {len(filtered)} "
+        f"({'+'.join(FILTER_GT_CLASSES)} GT fraction > "
+        f"{format_percent(FILTER_GT_FRACTION_THRESHOLD)})"
+    )
     print(
         f"Accuracy: {total_correct:,} / {total_valid:,} valid voxels "
         f"({format_percent(overall_accuracy)})"
@@ -383,13 +434,31 @@ def main() -> None:
     )
     print()
     print(
-        "Dice rows below are crop-size weighted averages of per-crop scores. "
+        "Dice/IoU rows below are crop-size weighted averages of per-crop scores. "
         "mean = equal class vote; total_by_gt_volume = class scores weighted "
         "by the global GT class volume fractions above."
     )
     print_metric_row("One-hot Dice", weighted_average(metrics, "one_hot_dice"), gt_fractions)
     print_metric_row("Logits Dice", weighted_average(metrics, "logits_dice"), gt_fractions)
+    print_metric_row("One-hot IoU", weighted_average(metrics, "one_hot_iou"), gt_fractions)
+    print_metric_row("Logits IoU", weighted_average(metrics, "logits_iou"), gt_fractions)
     print_metric_row("NS Dice", weighted_average(metrics, "ns_dice"), gt_fractions)
+
+    if filtered:
+        print()
+        print("=" * 80)
+        print(
+            f"Filtered crops excluded from overall metrics "
+            f"({'+'.join(FILTER_GT_CLASSES)} GT fraction > "
+            f"{format_percent(FILTER_GT_FRACTION_THRESHOLD)}):"
+        )
+        for metric in filtered:
+            accuracy = metric.correct_voxels / max(1, metric.valid_voxels)
+            print(
+                f"- {metric.dataset}/{metric.crop}: "
+                f"{'+'.join(FILTER_GT_CLASSES)}={format_percent(metric.gt_filter_fraction)}, "
+                f"accuracy={format_percent(accuracy)}, valid={metric.valid_voxels:,}"
+            )
 
     if failures:
         print()
