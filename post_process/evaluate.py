@@ -129,6 +129,56 @@ def compute_iou(
     return iou_per_class
 
 
+def compute_precision_recall_f1(
+    pred_labels: torch.Tensor | np.ndarray,
+    gt_labels: torch.Tensor | np.ndarray,
+    class_names: list[str],
+) -> dict[str, dict[str, float]]:
+    """Per-class precision/recall/F1 between two voxel label maps.
+
+    :param pred_labels: (W, H, D) integer tensor/array of predicted class ids.
+    :param gt_labels: (W, H, D) integer tensor/array of groundtruth class ids, same shape.
+    :param class_names: class names indexed by label id, i.e. `class_names[i]` is the
+        name of the class with id `i`.
+    :return: {class_name: {'precision', 'recall', 'f1'}} for every class present in
+        `pred_labels` or `gt_labels`, plus a 'mean' entry (macro average over those
+        classes). Classes absent from both pred and gt are skipped so they don't
+        dilute the mean.
+    :raises ShapeMismatchError: `pred_labels.shape != gt_labels.shape`.
+    """
+    pred_labels = torch.as_tensor(pred_labels)
+    gt_labels = torch.as_tensor(gt_labels)
+
+    if pred_labels.shape != gt_labels.shape:
+        raise ShapeMismatchError(
+            f"prediction shape {tuple(pred_labels.shape)} != groundtruth shape {tuple(gt_labels.shape)}"
+        )
+
+    per_class = {}
+    for label_id, name in enumerate(class_names):
+        pred_mask = pred_labels == label_id
+        gt_mask = gt_labels == label_id
+        if not pred_mask.any() and not gt_mask.any():
+            continue
+
+        tp = torch.count_nonzero(pred_mask & gt_mask)
+        fp = torch.count_nonzero(pred_mask & ~gt_mask)
+        fn = torch.count_nonzero(~pred_mask & gt_mask)
+
+        precision = (tp / (tp + fp)).item() if (tp + fp) > 0 else 0.0
+        recall = (tp / (tp + fn)).item() if (tp + fn) > 0 else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+
+        per_class[name] = {'precision': precision, 'recall': recall, 'f1': f1}
+
+    per_class['mean'] = {
+        metric: float(np.mean([v[metric] for k, v in per_class.items() if k != 'mean']))
+        for metric in ('precision', 'recall', 'f1')
+    } if per_class else {'precision': 0.0, 'recall': 0.0, 'f1': 0.0}
+
+    return per_class
+
+
 def compute_crop_accuracy(
     class_names: list[str],
     predictions_domain: str,

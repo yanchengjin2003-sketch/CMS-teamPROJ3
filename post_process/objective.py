@@ -128,15 +128,28 @@ def adjacency_cost(
 # Enclosure Cost
 # ─────────────────────────────────────────────
 
+def _face_neighbor_kernel(device, dtype) -> Tensor:
+    """6-连通（面邻接）conv3d 卷积核，用于统计某个体素性质的面邻居个数。"""
+    kernel = torch.zeros(1, 1, 3, 3, 3, device=device, dtype=dtype)
+    kernel[0, 0, 1, 1, 0] = kernel[0, 0, 1, 1, 2] = 1
+    kernel[0, 0, 1, 0, 1] = kernel[0, 0, 1, 2, 1] = 1
+    kernel[0, 0, 0, 1, 1] = kernel[0, 0, 2, 1, 1] = 1
+    return kernel
+
+
 def compute_escape_count(labels: Tensor, inner_layer_id: int, outer_layer_id: int) -> Tensor:
     """(N, W, H, D) -> 每个体素的'逃逸邻居'个数（标签既非膜也非胞质的邻居数）"""
     is_escape = ((labels != inner_layer_id) & (labels != outer_layer_id)).to(torch.float32)
     is_escape = is_escape.unsqueeze(1)  # (N, 1, W, H, D)
-    kernel = torch.zeros(1, 1, 3, 3, 3, device=labels.device, dtype=is_escape.dtype)
-    kernel[0, 0, 1, 1, 0] = kernel[0, 0, 1, 1, 2] = 1
-    kernel[0, 0, 1, 0, 1] = kernel[0, 0, 1, 2, 1] = 1
-    kernel[0, 0, 0, 1, 1] = kernel[0, 0, 2, 1, 1] = 1
+    kernel = _face_neighbor_kernel(labels.device, is_escape.dtype)
     return F.conv3d(is_escape, kernel, padding=1).squeeze(1)  # (N, W, H, D)
+
+
+def compute_self_neighbor_count(labels: Tensor, inner_layer_id: int) -> Tensor:
+    """(N, W, H, D) -> 每个体素标签为 inner_layer_id 的面邻居个数（0~6）。"""
+    is_self = (labels == inner_layer_id).to(torch.float32).unsqueeze(1)  # (N, 1, W, H, D)
+    kernel = _face_neighbor_kernel(labels.device, is_self.dtype)
+    return F.conv3d(is_self, kernel, padding=1).squeeze(1)  # (N, W, H, D)
 
 
 def compute_boundary_mask(labels: Tensor) -> Tensor:
@@ -153,16 +166,21 @@ def compute_boundary_mask(labels: Tensor) -> Tensor:
 
 def enclosure_cost(labels: Tensor, inner_layer_id: int, outer_layer_id: int, C_enclose) -> Tensor:
     escape_count = compute_escape_count(labels, inner_layer_id, outer_layer_id)
+    self_neighbor_count = compute_self_neighbor_count(labels, inner_layer_id)
     is_boundary = compute_boundary_mask(labels)
+    # 6 个面邻居全部是自身 label（inner_layer_id）时不计入惩罚：这只是local 逐体素近似，
+    # 没有做连通分量级别的全局逃逸判定（那样无法棋盘格并行、耗时不可接受），
+    # 因此需要豁免"深埋在合法厚结构内部、邻居全是自身"的体素，否则会被误判为非法包裹。
+    all_self = self_neighbor_count == 6
     # 边界体素缺失的邻居会被 conv3d 的零填充误判为"逃逸邻居数为0"，因此边界体素永远不计入被非法包裹的惩罚。
-    return C_enclose * ((escape_count == 0) & ~is_boundary).float()
+    return C_enclose * ((escape_count == 0) & ~all_self & ~is_boundary).float()
 
 
 def local_enclosure_bias(local_cost, labels, forbidden_enclosure_pairs, C_enclose) -> Tensor:
     enclosure_bias = torch.zeros_like(local_cost)
     for (inner_layer_id, outer_layer_id) in forbidden_enclosure_pairs:
         enclosure_bias[..., inner_layer_id] += enclosure_cost(labels, inner_layer_id, outer_layer_id, C_enclose)
-        local_cost = local_cost + enclosure_bias
+    local_cost = local_cost + enclosure_bias
     return local_cost
 
 def total_enclosure_cost(

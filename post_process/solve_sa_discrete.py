@@ -111,7 +111,9 @@ def solve_sa(
     T = float(T_init)
     decay = (T_final / T_init) ** (1.0 / max(n_iter - 1, 1))
 
-    best = {'iter': 0, 'labels': labels.clone(), 'cost': cost}
+    best_iter = torch.zeros(N, dtype=torch.int64, device=device)
+    best_labels = labels.clone()
+    best_cost = cost.clone()
 
     for i in range(n_iter):
         proposal = _propose_labels(labels, L, generator)  # (N, W, H, D)
@@ -139,19 +141,22 @@ def solve_sa(
 
         T *= decay
 
-        if cost < best['cost']:
-            best['iter'] = i
-            best['labels'] = labels.clone()
-            best['cost'] = cost
+        # per-sample "keep best seen" bookkeeping: cost/best_cost are (N, 1),
+        # so update each sample independently instead of a single Python `if`
+        # (which is ambiguous once N > 1).
+        improved = (cost < best_cost).squeeze(-1)  # (N,)
+        best_cost = torch.where(cost < best_cost, cost, best_cost)
+        best_labels = torch.where(improved.view(N, 1, 1, 1), labels, best_labels)
+        best_iter = torch.where(improved, torch.full_like(best_iter, i), best_iter)
 
         if verbose:
             if validate_fn is not None:
                 valid_result = validate_fn(labels)
-                print(f"Iter {i} | Cost: {cost.mean():.4f} | Valid Result: {valid_result}")
+                print(f"Iter {i} | Cost: {cost.tolist()} | Valid Result: {valid_result}")
             else:
-                print(f"Iter {i} | Cost: {cost.mean():.4f}")
+                print(f"Iter {i} | Cost: {cost.tolist()}")
 
     if verbose:
-        print(f"Best Iter: {best['iter']} | Cost: {best['cost']}")
+        print(f"Best Iter: {best_iter.tolist()} | Cost: {best_cost.squeeze(-1).tolist()}")
 
-    return F.one_hot(best['labels'], L).to(orig_dtype)
+    return F.one_hot(best_labels, L).to(orig_dtype)
